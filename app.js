@@ -31,7 +31,7 @@ async function boot(){
 }
 async function logout(){await sb.auth.signOut();location.hash="";location.reload()}
 function nav(cur){
-  const it=[["#/painel","Meu painel"]];if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha"]);
+  const it=[["#/painel","Meu painel"]];if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin||S.me.can_manage_tasks)it.push(["#/tarefas","Tarefas"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha"]);
   $("#nav").innerHTML=it.map(([h,t])=>`<a href="${h}" class="${cur.startsWith(h)?"on":""}">${t}</a>`).join("");
 }
 function route(){killCharts();const h=location.hash||"#/painel";nav(h);const p=h.split("/");
@@ -39,6 +39,7 @@ function route(){killCharts();const h=location.hash||"#/painel";nav(h);const p=h
   if(p[1]==="avaliar"&&p[2])return fichaView(p[2],p[3]);
   if(p[1]==="avaliar")return evalListView();
   if(p[1]==="admin")return adminView();
+  if(p[1]==="tarefas")return tarefasView();
   if(p[1]==="senha")return pwView(false);
   if(p[1]==="ver")return verView(p[2]);
   return painelView();
@@ -235,12 +236,10 @@ async function adminView(){
    <table><tr><th>Pessoa</th><th>Função</th><th>Nível</th><th>Avaliador(a)</th><th>Ativa</th><th></th></tr>${as.map(a=>`<tr data-a="${a.id}"><td>${esc(pn(a.profile_id))}</td><td><input data-k="titulo" value="${esc(a.titulo)}"><div class="mut sm">${a.function_key} · ${a.track}</div></td>
    <td><select data-k="level_code"><option value="">—</option>${S.levels.map(l=>`<option value="${l.code}" ${l.code===a.level_code?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select></td>
    <td><select data-k="evaluator_id"><option value="">—</option>${ps.map(p=>`<option value="${p.id}" ${p.id===a.evaluator_id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></td><td><input type="checkbox" data-k="ativo" ${a.ativo?"checked":""} style="width:auto"></td><td><button class="sm" data-sa="${a.id}">Salvar</button></td></tr>`).join("")}</table></div>
-  <div class="card" style="margin-top:1rem"><h2>Tarefas diárias sugeridas (fase 2)</h2><p class="mut sm">Rascunhos para sua aprovação. Aprovadas entram no checklist de cada função.</p>
-   <table><tr><th>Função</th><th>Tarefa</th><th>XP</th><th>Status</th></tr>${(ts||[]).map(t=>`<tr><td class="mut sm">${t.function_key}</td><td>${esc(t.titulo)}</td><td>${t.xp}</td><td><select data-t="${t.id}">${["rascunho","aprovada","arquivada"].map(s=>`<option ${t.status===s?"selected":""}>${s}</option>`).join("")}</select></td></tr>`).join("")}</table></div>`;
+  <div class="card" style="margin-top:1rem"><div class="row"><h2>Tarefas diárias</h2><div class="sp"></div><a href="#/tarefas"><button class="sm">Gerenciar tarefas</button></a></div></div>`;
   setTimeout(()=>{const b=$("#pb");if(b)b.style.width=(evAs.length?100*(evAs.length-pendentes)/evAs.length:0)+"%"},80);
   S.charts.push(new Chart($("#bars"),{type:"bar",data:{labels:avgBy.map(x=>x.p.nome),datasets:[{data:avgBy.map(x=>x.n),backgroundColor:avgBy.map((x,i)=>i%2?"#8BA480":"#DFA624"),borderRadius:8}]},options:{animation:{duration:1300},scales:{y:{min:0,max:5}},plugins:{legend:{display:false}}}}));
   document.querySelectorAll("[data-pv]").forEach(x=>x.onclick=ev=>{ev.preventDefault();killCharts();painelView(x.dataset.pv)});
-  document.querySelectorAll("[data-t]").forEach(x=>x.onchange=async()=>{const {error}=await sb.from("task_templates").update({status:x.value}).eq("id",x.dataset.t);toast(error?error.message:"Tarefa atualizada")});
   document.querySelectorAll("[data-sa]").forEach(b=>b.onclick=async()=>{const tr=b.closest("tr"),row={};tr.querySelectorAll("[data-k]").forEach(i=>row[i.dataset.k]=i.type==="checkbox"?i.checked:(i.value||null));
     const {error}=await sb.from("assignments").update(row).eq("id",b.dataset.sa);toast(error?error.message:"Função salva")});
   const fn=async body=>{const {data:{session}}=await sb.auth.getSession();const r=await fetch(SB_URL+"/functions/v1/admin-users",{method:"POST",headers:{"Content-Type":"application/json",apikey:SB_KEY,Authorization:"Bearer "+session.access_token},body:JSON.stringify(body)});return r.json()};
@@ -250,5 +249,32 @@ async function adminView(){
   $("#na").onclick=async()=>{const p=prompt("Usuário da pessoa (ex.: veronica):");if(!p)return;const pr=ps.find(x=>x.usuario===p.trim().toLowerCase());if(!pr)return toast("Usuário não encontrado");
     const t=prompt("Nome da função:");if(!t)return;const tr=prompt("Trilha: tecnica, comercial, gestao ou funcao","tecnica");if(!TRACK[tr])return toast("Trilha inválida");
     const {error}=await sb.from("assignments").insert({profile_id:pr.id,titulo:t,track:tr,function_key:tr==="tecnica"?"edfisica":tr==="comercial"?"comercial":tr});toast(error?error.message:"Função criada");adminView()};
+}
+
+/* ---------- Gestão de tarefas ---------- */
+const FUNCS={edfisica:"Estagiário(a) de Ed. Física",professor:"Professor(a)",coord_salao:"Coordenação do Salão",coord_comercial:"Coordenação Comercial",recepcao:"Recepção",administrativo:"Auxiliar Administrativa"};
+const TST={rascunho:["Aguardando aprovação","tag"],aprovada:["Aprovada","tag ol"],arquivada:["Retirada","tag rd"]};
+async function tarefasView(){
+  if(!(S.me.is_admin||S.me.can_manage_tasks)){location.hash="#/painel";return}
+  const {data:ts,error}=await sb.from("task_templates").select("*").order("function_key").order("ordem");
+  if(error){app.innerHTML=`<div class="card">${esc(error.message)}</div>`;return}
+  const f=S.tf||"todas",st=S.ts||"ativas";
+  const list=ts.filter(t=>(f==="todas"||t.function_key===f)&&(st==="todas"||(st==="ativas"?t.status!=="arquivada":t.status===st)));
+  const cnt=k=>ts.filter(t=>t.status===k).length;
+  const opt=(o,v)=>Object.entries(o).map(([k,l])=>`<option value="${k}" ${k===v?"selected":""}>${esc(l)}</option>`).join("");
+  app.innerHTML=`<h1>Tarefas diárias</h1><p class="mut">Inserir, editar, aprovar ou retirar tarefas. Retirar não apaga: o histórico dos checklists fica preservado.</p>
+  <div class="grid"><div class="card hi"><div class="mut sm">Aprovadas</div><div class="kpi">${cnt("aprovada")}</div></div><div class="card"><div class="mut sm">Aguardando aprovação</div><div class="kpi">${cnt("rascunho")}</div></div><div class="card"><div class="mut sm">Retiradas</div><div class="kpi">${cnt("arquivada")}</div></div></div>
+  <div class="card" style="margin-top:1rem"><h2>Nova tarefa</h2><div class="grid"><select id="nf">${opt(FUNCS,f==="todas"?"edfisica":f)}</select><input id="nt" placeholder="Descrição da tarefa"><input id="nx" type="number" min="1" max="100" value="10" placeholder="XP"><button id="nb">Inserir</button></div></div>
+  <div class="card" style="margin-top:1rem"><div class="row"><h2>Lista</h2><div class="sp"></div><select id="ff" style="width:auto">${opt({todas:"Todas as funções",...FUNCS},f)}</select><select id="fs" style="width:auto">${opt({ativas:"Ativas",rascunho:"Aguardando aprovação",aprovada:"Aprovadas",arquivada:"Retiradas",todas:"Todas"},st)}</select>
+  ${cnt("rascunho")?`<button class="sm" id="all">Aprovar todas pendentes${f!=="todas"?" desta função":""}</button>`:""}</div>
+  <table><tr><th>Função</th><th>Tarefa</th><th>XP</th><th>Status</th><th></th></tr>${list.map(t=>`<tr data-id="${t.id}"><td><select data-k="function_key">${opt(FUNCS,t.function_key)}</select></td><td><input data-k="titulo" value="${esc(t.titulo)}"></td><td style="width:80px"><input data-k="xp" type="number" min="1" max="100" value="${t.xp}"></td>
+   <td><span class="${TST[t.status][1]}">${TST[t.status][0]}</span></td><td class="row" style="flex-wrap:nowrap"><button class="sm ghost" data-a="save">Salvar</button>${t.status!=="aprovada"?'<button class="sm" data-a="aprovada">Aprovar</button>':""}${t.status!=="arquivada"?'<button class="sm ghost" data-a="arquivada">Retirar</button>':'<button class="sm ghost" data-a="rascunho">Reativar</button>'}</td></tr>`).join("")||'<tr><td colspan="5" class="mut">Nenhuma tarefa neste filtro.</td></tr>'}</table></div>`;
+  $("#ff").onchange=e=>{S.tf=e.target.value;tarefasView()};$("#fs").onchange=e=>{S.ts=e.target.value;tarefasView()};
+  $("#nb").onclick=async()=>{const t=$("#nt").value.trim();if(!t)return toast("Escreva a tarefa");const fk=$("#nf").value;
+    const {error}=await sb.from("task_templates").insert({function_key:fk,titulo:t,xp:+$("#nx").value||10,ordem:ts.filter(x=>x.function_key===fk).length,status:"rascunho"});toast(error?error.message:"Tarefa inserida (aguardando aprovação)");tarefasView()};
+  const al=$("#all");if(al)al.onclick=async()=>{if(!confirm("Aprovar todas as tarefas pendentes"+(f!=="todas"?" desta função":"")+"?"))return;let q=sb.from("task_templates").update({status:"aprovada"}).eq("status","rascunho");if(f!=="todas")q=q.eq("function_key",f);const {error}=await q;toast(error?error.message:"Tarefas aprovadas");tarefasView()};
+  document.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const tr=b.closest("tr"),row={};tr.querySelectorAll("[data-k]").forEach(i=>row[i.dataset.k]=i.dataset.k==="xp"?+i.value:i.value.trim());
+    if(!row.titulo)return toast("A tarefa não pode ficar vazia");if(b.dataset.a!=="save"){if(b.dataset.a==="arquivada"&&!confirm("Retirar esta tarefa? O histórico fica preservado."))return;row.status=b.dataset.a}
+    const {error}=await sb.from("task_templates").update(row).eq("id",tr.dataset.id);toast(error?error.message:({save:"Tarefa salva",aprovada:"Tarefa aprovada ✅",arquivada:"Tarefa retirada",rascunho:"Tarefa reativada (aguardando aprovação)"})[b.dataset.a]);tarefasView()});
 }
 boot();
