@@ -6,7 +6,7 @@ const fmt=n=>n==null?"—":Number(n).toFixed(2).replace(".",",");
 const ini=n=>(n||"?").trim()[0].toUpperCase();
 const toast=m=>{const t=$("#toast");t.textContent=m;t.classList.add("on");setTimeout(()=>t.classList.remove("on"),2600)};
 const TRACK={tecnica:"Trilha Técnica · Educação Física",comercial:"Trilha Comercial",gestao:"Gestão",funcao:"Função (não é nível de carreira)"};
-const STATUS={rascunho:["Rascunho","tag"],enviada:["Aguardando ciência","tag rd"],ciente:["Ciente","tag ol"]};
+const STATUS={rascunho:["Rascunho","tag"],revisao:["Em revisão","tag"],enviada:["Aguardando ciência","tag rd"],ciente:["Ciente","tag ol"]};
 const periodoAtual=()=>{const d=new Date();return d.getFullYear()+"-T"+(Math.floor(d.getMonth()/3)+1)};
 let S={user:null,me:null,levels:[],crit:[],charts:[]};
 function killCharts(){S.charts.forEach(c=>c.destroy());S.charts=[]}
@@ -25,7 +25,8 @@ async function boot(){
   S.levels=l.data||[];S.crit=c.data||[];
   const {count}=await sb.from("assignments").select("id",{count:"exact",head:true}).eq("evaluator_id",me.id);
   const {count:sc}=await sb.from("service_contracts").select("id",{count:"exact",head:true}).eq("reviewer_id",me.id);
-  S.isEval=me.is_admin||(count||0)>0||(sc||0)>0;
+  const {count:rc}=await sb.from("assignments").select("id",{count:"exact",head:true}).eq("reviewer_id",me.id);
+  S.isEval=me.is_admin||(count||0)>0||(sc||0)>0||(rc||0)>0;
   $("#top").hidden=false;$("#logout").onclick=logout;
   window.onhashchange=route;route();
 }
@@ -104,9 +105,9 @@ async function painelView(pid){
   if(own&&S.me.fora_do_plano)return gestaoView();
   app.innerHTML='<div class="loader"></div>';
   const {data:prof}=await sb.from("profiles").select("*").eq("id",pid).single();
-  const {data:as}=await sb.from("assignments").select("*,evaluator:evaluator_id(nome)").eq("profile_id",pid).eq("ativo",true).order("created_at");
+  const {data:as}=await sb.from("assignments").select("*,evaluator:evaluator_id(nome),reviewer:reviewer_id(nome)").eq("profile_id",pid).eq("ativo",true).order("created_at");
   const ids=(as||[]).map(a=>a.id);
-  const {data:evs}=ids.length?await sb.from("evaluations").select("*").in("assignment_id",ids).neq("status","rascunho").order("created_at"):{data:[]};
+  const {data:evs}=ids.length?await sb.from("evaluations").select("*").in("assignment_id",ids).in("status",["enviada","ciente"]).order("created_at"):{data:[]};
   const xp=own?(await sb.rpc("my_xp_rank")).data?.[0]:null;
   const pend=(evs||[]).filter(e=>e.status==="enviada");
   let h=`<div class="row"><div><p class="mut sm" style="margin:0">${own?"Olá,":"Painel de"}</p><h1 style="margin:0 0 1rem">${esc(prof?.nome)}</h1></div><div class="sp"></div>
@@ -114,7 +115,7 @@ async function painelView(pid){
   if(own&&pend.length)h+=`<div class="card hi" style="margin-bottom:1rem"><h2>📩 Você tem ${pend.length} avaliação(ões) para dar ciência</h2>${pend.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="row" style="margin:.5rem 0"><span>${esc(a?.titulo)} · ${esc(e.periodo)} · nota <b style="color:var(--gold)">${fmt(e.nota_final)}</b></span><div class="sp"></div><a href="#/ver/${e.id}"><button class="sm">Ver e dar ciência</button></a></div>`}).join("")}</div>`;
   h+=`<div class="grid">`;
   (as||[]).forEach((a,i)=>{const my=(evs||[]).filter(e=>e.assignment_id===a.id);const last=my[my.length-1];const lv=S.levels.find(l=>l.code===a.level_code);
-    h+=`<div class="card ${i===0?"hi":""}" style="animation-delay:${i*.08}s"><div class="row"><span class="tag">${esc(TRACK[a.track])}</span><div class="sp"></div>${a.evaluator?`<span class="mut sm">Avaliador(a): <b>${esc(a.evaluator.nome)}</b></span>`:""}</div>
+    h+=`<div class="card ${i===0?"hi":""}" style="animation-delay:${i*.08}s"><div class="row"><span class="tag">${esc(TRACK[a.track])}</span><div class="sp"></div>${a.evaluator?`<span class="mut sm">Avaliador(a): <b>${esc(a.evaluator.nome)}</b>${a.reviewer?` · revisão: <b>${esc(a.reviewer.nome)}</b>`:""}</span>`:""}</div>
      <h2 style="margin-top:.6rem">${esc(a.titulo)}</h2><p class="mut sm" style="margin-top:-.3rem">${lv?`Nível atual: <b style="color:var(--gold)">${lv.code} · ${esc(lv.cargo)}</b>`:"Nível atual: a definir"}${a.observacao?` · ${esc(a.observacao)}`:""}</p>
      ${a.evaluator?`<div class="row" style="align-items:center">${ring(last?.nota_final)}<div class="sp" style="min-width:220px;max-width:320px"><canvas id="rd${i}"></canvas></div></div>
      ${my.length>1?`<canvas id="ln${i}" height="110"></canvas>`:`<p class="mut sm">${last?`Última avaliação: ${esc(last.periodo)} · <a href="#/ver/${last.id}" style="color:var(--gold)">abrir</a>`:"Ainda sem avaliação liberada."}</p>`}`:""}
@@ -126,32 +127,36 @@ async function painelView(pid){
 
 /* ---------- Ver avaliação / ciência ---------- */
 async function verView(id){
-  const {data:e}=await sb.from("evaluations").select("*,assignment:assignment_id(*,profile:profile_id(nome),evaluator:evaluator_id(nome))").eq("id",id).single();
+  const {data:e}=await sb.from("evaluations").select("*,assignment:assignment_id(*,profile:profile_id(nome),evaluator:evaluator_id(nome),reviewer:reviewer_id(nome))").eq("id",id).single();
   if(!e){app.innerHTML='<div class="card">Avaliação não encontrada.</div>';return}
   const a=e.assignment,lv=S.levels.find(l=>l.code===e.level_code),own=a.profile_id===S.me.id;
   app.innerHTML=`<a href="#/painel" class="mut sm">← voltar</a><h1>${esc(a.titulo)} · ${esc(e.periodo)}</h1>
-  <div class="grid"><div class="card hi"><div class="row"><span class="${STATUS[e.status][1]}">${STATUS[e.status][0]}</span><div class="sp"></div><span class="mut sm">${esc(a.profile?.nome)} · avaliado por ${esc(a.evaluator?.nome)}</span></div>
+  <div class="grid"><div class="card hi"><div class="row"><span class="${STATUS[e.status][1]}">${STATUS[e.status][0]}</span><div class="sp"></div><span class="mut sm">${esc(a.profile?.nome)} · avaliado por ${esc(a.evaluator?.nome)}${a.reviewer?` · revisão: ${esc(a.reviewer.nome)}`:""}</span></div>
    ${ring(e.nota_final,5,"nota final")}<canvas id="rd"></canvas></div>
    <div class="card"><h3>Nível</h3><p>${lv?`${lv.code} · ${esc(lv.cargo)}`:"—"} ${e.subetapa?`· sub-etapa ${e.subetapa}`:""}</p>
    ${lv?`<h3>Requisitos cumpridos</h3>${lv.reqs.map((r,i)=>`<div class="req">${(e.reqs_ok||[]).includes(i)?"✅":"⬜"} <span>${esc(r)}</span></div>`).join("")}`:""}
    <h3>Notas</h3>${S.crit.map(c=>`<div class="row sm"><span class="sp">${esc(c.nome)} (${c.peso}%)</span><b style="color:var(--gold)">${e.scores?.[c.id]??"—"}</b></div>`).join("")}
    <h3>Observações</h3><p class="sm">${esc(e.observacoes)||"—"}</p><h3>PDI · metas</h3><p class="sm" style="white-space:pre-wrap">${esc(e.pdi)||"—"}</p>
+   ${revBox(e)}
    ${e.comentario_colaborador?`<h3>Comentário do colaborador</h3><p class="sm">${esc(e.comentario_colaborador)}</p>`:""}
    ${own&&e.status==="enviada"?`<label class="t">Comentário (opcional)</label><textarea id="cm"></textarea><p></p><button id="ok">Dou ciência desta avaliação</button>`:""}</div></div>`;
   radar($("#rd"),[{label:"Notas",scores:e.scores}]);
   const b=$("#ok");if(b)b.onclick=async()=>{const {error}=await sb.rpc("acknowledge_evaluation",{eval_id:id,comentario:$("#cm").value||null});if(error)return toast(error.message);toast("Ciência registrada");verView(id)};
 }
 
+function revBox(e){if(!e.revisado_em)return "";const ch=S.crit.filter(c=>e.scores_primario&&e.scores_primario[c.id]!=e.scores?.[c.id]);
+  return `<h3>Revisão da 2ª etapa</h3><p class="sm">${e.revisao_concordo?"✅ Concordo":""}${e.revisao_concordo&&e.revisao_ressalvas?" · ":""}${e.revisao_ressalvas?"⚠️ Ressalvas: "+esc(e.revisao_ressalvas):""}</p>
+  ${ch.length?`<p class="sm">Notas ajustadas: ${ch.map(c=>`${esc(c.nome)} ${e.scores_primario[c.id]}→<b style="color:var(--gold)">${e.scores[c.id]}</b>`).join(" · ")}</p><p class="mut sm">Justificativa: ${esc(e.revisao_justificativa)}</p>`:""}`}
 /* ---------- Avaliar ---------- */
 async function evalListView(){
-  let q=sb.from("assignments").select("*,profile:profile_id(nome),evaluator:evaluator_id(nome)").eq("ativo",true).not("evaluator_id","is",null);
-  if(!S.me.is_admin)q=q.eq("evaluator_id",S.me.id);
+  let q=sb.from("assignments").select("*,profile:profile_id(nome),evaluator:evaluator_id(nome),reviewer:reviewer_id(nome)").eq("ativo",true).not("evaluator_id","is",null);
+  if(!S.me.is_admin)q=q.or(`evaluator_id.eq.${S.me.id},reviewer_id.eq.${S.me.id}`);
   const [{data:as},{data:sc},{data:evs}]=await Promise.all([q,sb.from("service_contracts").select("*").eq("ativo",true),sb.from("evaluations").select("id,assignment_id,status,nota_final,periodo")]);
-  const groups={};(as||[]).forEach(a=>{const k=a.evaluator?.nome||"—";(groups[k]=groups[k]||[]).push(a)});
+  const groups={};(as||[]).forEach(a=>{const k=(!S.me.is_admin&&a.reviewer_id===S.me.id)?"__rev":a.evaluator?.nome||"—";(groups[k]=groups[k]||[]).push(a)});
   let h=`<h1>Avaliar</h1><p class="mut">Uma ficha por função. A nota final é calculada sozinha com os pesos 25/25/20/15/15.</p><div class="grid">`;
   for(const [ev,list] of Object.entries(groups)){
-    h+=`<div class="card list"><h3>${S.me.is_admin?`Avaliador(a): ${esc(ev)}`:"Quem eu avalio"}</h3>${list.map(a=>{const e=(evs||[]).filter(x=>x.assignment_id===a.id);const last=e[e.length-1];
-      return `<a class="item" href="#/avaliar/${a.id}"><div class="av">${ini(a.profile?.nome)}</div><div class="sp"><b>${esc(a.profile?.nome)}</b><div class="mut sm">${esc(a.titulo)}${a.level_code?" · "+a.level_code:""}</div></div>${last?`<span class="${STATUS[last.status][1]}">${fmt(last.nota_final)}</span>`:'<span class="tag rd">pendente</span>'}</a>`}).join("")}</div>`}
+    h+=`<div class="card list"><h3>${ev==="__rev"?"Revisar · 2ª etapa":S.me.is_admin?`Avaliador(a): ${esc(ev)}`:"Quem eu avalio"}</h3>${list.map(a=>{const e=(evs||[]).filter(x=>x.assignment_id===a.id);const last=e[e.length-1];
+      return `<a class="item" href="#/avaliar/${a.id}"><div class="av">${ini(a.profile?.nome)}</div><div class="sp"><b>${esc(a.profile?.nome)}</b><div class="mut sm">${esc(a.titulo)}${a.level_code?" · "+a.level_code:""}${a.reviewer?` · avalia ${esc(a.evaluator?.nome)}, revisa ${esc(a.reviewer.nome)}`:""}</div></div>${last?`<span class="${STATUS[last.status][1]}">${fmt(last.nota_final)}</span>`:'<span class="tag rd">pendente</span>'}</a>`}).join("")}</div>`}
   if((sc||[]).length)h+=`<div class="card list"><h3>Serviço terceirizado · fora do plano</h3>${sc.map(s=>`<a class="item" href="#/avaliar/servico/${s.id}"><div class="av" style="background:var(--olive)">M</div><div class="sp"><b>${esc(s.nome)}</b><div class="mut sm">${esc(s.prestador)}</div></div></a>`).join("")}</div>`;
   app.innerHTML=h+"</div>";
 }
@@ -161,7 +166,8 @@ async function fichaView(aid,eid){
   const {data:hist}=await sb.from("evaluations").select("*").eq("assignment_id",aid).order("created_at");
   let e=eid?(hist||[]).find(x=>x.id===eid):(hist||[]).find(x=>x.status==="rascunho");
   e=e||{periodo:periodoAtual(),level_code:a.level_code,scores:{},reqs_ok:[],status:"rascunho"};
-  const ro=e.status==="ciente";
+  const rv=a.reviewer_id,isRev=rv&&(rv===S.me.id||(S.me.is_admin&&a.evaluator_id!==S.me.id))&&e.status==="revisao";
+  const ro=e.status==="ciente"||(rv&&e.status!=="rascunho"&&!isRev)||(rv===S.me.id&&!isRev), roP=ro||isRev;
   let lvOpts=a.track==="funcao"?S.levels.filter(l=>l.code===a.level_code):a.function_key==="coord_comercial"?S.levels.filter(l=>["C4","G3"].includes(l.code)):trackLevels(a.track);
   if(a.track==="comercial"&&a.function_key!=="coord_comercial")lvOpts=trackLevels("comercial").filter(l=>l.code!=="C4");
   const draw=()=>{
@@ -173,28 +179,41 @@ async function fichaView(aid,eid){
   const upd=()=>{const n=calc();$("#ringbox").innerHTML=ring(n,5,w100()?"nota final":"parcial");const veto=(e.scores[1]||5)<3;$("#veto").hidden=!veto;if(S.charts[0]){S.charts[0].data.datasets[0].data=S.crit.map(c=>e.scores[c.id]||0);S.charts[0].update()}};
   const w100=()=>S.crit.every(c=>e.scores[c.id]);
   app.innerHTML=`<a href="#/avaliar" class="mut sm">← voltar</a><div class="row"><h1>${esc(a.profile?.nome)} · ${esc(a.titulo)}</h1><div class="sp"></div><span class="${STATUS[e.status][1]}">${STATUS[e.status][0]}</span></div>
-  <div class="grid"><div class="card"><label class="t">Período</label><input id="per" value="${esc(e.periodo)}" ${ro?"disabled":""}>
-   <label class="t">Nível atual</label><select id="lv" ${ro?"disabled":""}><option value="">— escolha —</option>${lvOpts.map(l=>`<option value="${l.code}" ${l.code===e.level_code?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select>
-   ${a.track!=="funcao"?`<label class="t">Sub-etapa</label><select id="sub" ${ro?"disabled":""}><option value="">—</option>${["A","B","C"].map(x=>`<option ${e.subetapa===x?"selected":""}>${x}</option>`).join("")}</select>`:""}
+  <div class="grid"><div class="card"><label class="t">Período</label><input id="per" value="${esc(e.periodo)}" ${roP?"disabled":""}>
+   <label class="t">Nível atual</label><select id="lv" ${roP?"disabled":""}><option value="">— escolha —</option>${lvOpts.map(l=>`<option value="${l.code}" ${l.code===e.level_code?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select>
+   ${a.track!=="funcao"?`<label class="t">Sub-etapa</label><select id="sub" ${roP?"disabled":""}><option value="">—</option>${["A","B","C"].map(x=>`<option ${e.subetapa===x?"selected":""}>${x}</option>`).join("")}</select>`:""}
    <h3 style="margin-top:1rem">Requisitos do nível · marque o que já cumpre</h3><div id="reqs"></div></div>
    <div class="card hi"><div id="ringbox"></div><canvas id="rd"></canvas><p id="veto" class="note sm" hidden>⚠️ Nota menor que 3 em Cultura e ética bloqueia a promoção.</p>
-   <div class="scores">${S.crit.map(c=>`<div class="crit"><div class="n"><b>${esc(c.nome)}</b> <span class="tag">${c.peso}%</span><div class="mut sm">${esc(c.descricao||"")}</div></div><div class="pick" data-c="${c.id}">${[1,2,3,4,5].map(v=>`<button type="button" data-v="${v}" class="${e.scores[c.id]==v?"on":""}" ${ro?"disabled":""}>${v}</button>`).join("")}</div></div>`).join("")}</div></div>
-   <div class="card"><label class="t">Observações / justificativa</label><textarea id="obs" ${ro?"disabled":""}>${esc(e.observacoes||"")}</textarea>
-   <label class="t">Próximo nível combinado</label><select id="nx" ${ro?"disabled":""}><option value="">—</option>${lvOpts.map(l=>`<option value="${l.code}" ${l.code===e.proximo_nivel?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select>
-   <label class="t">PDI · 2 ou 3 metas</label><textarea id="pdi" ${ro?"disabled":""}>${esc(e.pdi||"")}</textarea>
-   ${ro?`<p class="note sm">Colaborador(a) deu ciência em ${new Date(e.ciente_em).toLocaleDateString("pt-BR")}. ${esc(e.comentario_colaborador||"")}</p>`:`<p></p><div class="row"><button class="ghost" id="sv">Salvar rascunho</button><button id="send">Enviar para ciência</button></div>`}
+   <div class="scores">${S.crit.map(c=>`<div class="crit"><div class="n"><b>${esc(c.nome)}</b> <span class="tag">${c.peso}%</span><div class="mut sm">${esc(c.descricao||"")}</div></div><div class="pick" data-c="${c.id}">${[1,2,3,4,5].map(v=>`<button type="button" data-v="${v}" class="${e.scores[c.id]==v?"on":""}" ${roP?"disabled":""} data-keep>${v}</button>`).join("")}</div></div>`).join("")}</div></div>
+   <div class="card"><label class="t">Observações / justificativa</label><textarea id="obs" ${roP?"disabled":""}>${esc(e.observacoes||"")}</textarea>
+   <label class="t">Próximo nível combinado</label><select id="nx" ${roP?"disabled":""}><option value="">—</option>${lvOpts.map(l=>`<option value="${l.code}" ${l.code===e.proximo_nivel?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select>
+   <label class="t">PDI · 2 ou 3 metas</label><textarea id="pdi" ${roP?"disabled":""}>${esc(e.pdi||"")}</textarea>
+   ${rv&&e.scores_primario&&e.status!=="rascunho"?`<p class="note sm">Notas da avaliadora primária: ${S.crit.map(c=>e.scores_primario[c.id]).join(" · ")}</p>`:""}${revBox(e)}
+   ${isRev?`<h3>Revisão · 2ª etapa</h3><label class="req"><input type="checkbox" id="rc" ${e.revisao_concordo?"checked":""}><span>Concordo com a avaliação</span></label>
+   <label class="t">Ressalvas</label><textarea id="rr">${esc(e.revisao_ressalvas||"")}</textarea>
+   <label class="t">Justificativa (obrigatória se ajustar notas)</label><textarea id="rj">${esc(e.revisao_justificativa||"")}</textarea>
+   <p class="mut sm">Você pode ajustar as notas acima. A colaboradora só vê depois que você concluir.</p><div class="row"><button class="ghost" id="rsv">Salvar revisão</button><button id="rok">Concluir revisão e liberar</button></div>`
+   :e.status==="revisao"?`<p class="note sm">Enviada. Aguardando a revisão de 2ª etapa; a colaboradora ainda não vê.</p>`
+   :e.status==="enviada"&&rv?`<p class="note sm">Revisada e liberada para ciência.</p>`
+   :e.status==="ciente"?`<p class="note sm">Colaborador(a) deu ciência em ${new Date(e.ciente_em).toLocaleDateString("pt-BR")}. ${esc(e.comentario_colaborador||"")}</p>`:ro?"":`<p></p><div class="row"><button class="ghost" id="sv">Salvar rascunho</button><button id="send">${rv?"Enviar para revisão":"Enviar para ciência"}</button></div>`}
    <h3 style="margin-top:1.2rem">Histórico</h3>${(hist||[]).map(x=>`<div class="row sm"><a href="#/avaliar/${aid}/${x.id}" style="color:var(--txt)">${esc(x.periodo)}</a><span class="${STATUS[x.status][1]}">${STATUS[x.status][0]}</span><div class="sp"></div><b style="color:var(--gold)">${fmt(x.nota_final)}</b></div>`).join("")||'<p class="mut sm">Primeira avaliação.</p>'}</div></div>`;
   radar($("#rd"),[{label:"Notas",scores:e.scores}]);draw();upd();
   $("#lv").onchange=x=>{e.level_code=x.target.value||null;e.reqs_ok=[];draw()};
   document.querySelectorAll(".pick").forEach(p=>p.onclick=ev=>{const b=ev.target.closest("button");if(!b||ro)return;e.scores[p.dataset.c]=+b.dataset.v;p.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));upd()});
   const save=async st=>{
     if(st==="enviada"&&!w100())return toast("Dê nota nos 5 critérios antes de enviar");
+    if(isRev){const row={scores:e.scores,revisao_concordo:$("#rc").checked,revisao_ressalvas:$("#rr").value.trim()||null,revisao_justificativa:$("#rj").value.trim()||null,status:st};
+      if(st==="enviada"&&!row.revisao_concordo&&!row.revisao_ressalvas)return toast("Marque Concordo e/ou escreva ressalvas");
+      if(st==="enviada"&&S.crit.some(c=>e.scores_primario?.[c.id]!=e.scores[c.id])&&!row.revisao_justificativa)return toast("Justifique o ajuste de notas");
+      const r=await sb.from("evaluations").update(row).eq("id",e.id).select().single();if(r.error)return toast(r.error.message);
+      toast(st==="enviada"?"Revisão concluída · liberada ✅":"Revisão salva");return fichaView(aid,e.id)}
     const row={assignment_id:aid,periodo:$("#per").value.trim()||periodoAtual(),level_code:e.level_code||null,subetapa:$("#sub")?.value||null,scores:e.scores,reqs_ok:e.reqs_ok||[],observacoes:$("#obs").value,pdi:$("#pdi").value,proximo_nivel:$("#nx").value||null,status:st};
     const r=e.id?await sb.from("evaluations").update(row).eq("id",e.id).select().single():await sb.from("evaluations").insert({...row,evaluator_id:S.me.id}).select().single();
     if(r.error)return toast(r.error.message);
     if(st==="enviada"&&e.level_code&&S.me.is_admin&&e.level_code!==a.level_code)await sb.from("assignments").update({level_code:e.level_code}).eq("id",aid);
-    toast(st==="enviada"?"Enviada para ciência ✅":"Rascunho salvo");location.hash=`#/avaliar/${aid}/${r.data.id}`;if(e.id)fichaView(aid,r.data.id)};
-  if(!ro){$("#sv").onclick=()=>save("rascunho");$("#send").onclick=()=>save("enviada")}
+    toast(st==="enviada"?(rv?"Enviada para revisão ✅":"Enviada para ciência ✅"):"Rascunho salvo");location.hash=`#/avaliar/${aid}/${r.data.id}`;if(e.id)fichaView(aid,r.data.id)};
+  if(isRev){$("#rsv").onclick=()=>save("revisao");$("#rok").onclick=()=>save("enviada")}
+  else if(!ro){$("#sv").onclick=()=>save("rascunho");$("#send").onclick=()=>save("enviada")}
 }
 async function serviceView(cid){
   const [{data:s},{data:hist}]=await Promise.all([sb.from("service_contracts").select("*").eq("id",cid).single(),sb.from("service_reviews").select("*").eq("contract_id",cid).order("created_at")]);
@@ -224,7 +243,7 @@ async function adminView(){
   if(!S.me.is_admin){location.hash="#/painel";return}
   const [{data:ps},{data:as},{data:evs},{data:ts}]=await Promise.all([sb.from("profiles").select("*").order("nome"),sb.from("assignments").select("*").order("created_at"),sb.from("evaluations").select("assignment_id,nota_final,status,periodo"),sb.from("task_templates").select("*").order("function_key").order("ordem")]);
   const pn=id=>ps.find(p=>p.id===id)?.nome||"—";
-  const done=(evs||[]).filter(e=>e.status!=="rascunho");
+  const done=(evs||[]).filter(e=>e.status==="enviada"||e.status==="ciente");
   const avgBy=ps.filter(p=>as.some(a=>a.profile_id===p.id&&a.evaluator_id)).map(p=>{const ids=as.filter(a=>a.profile_id===p.id).map(a=>a.id);const n=done.filter(e=>ids.includes(e.assignment_id)).map(e=>+e.nota_final);return {p,n:n.length?n.reduce((a,b)=>a+b,0)/n.length:0}});
   const evAs=as.filter(a=>a.evaluator_id);const pendentes=evAs.filter(a=>!done.some(e=>e.assignment_id===a.id)).length;
   app.innerHTML=`<h1>Painel do administrador</h1>
@@ -234,9 +253,9 @@ async function adminView(){
   <div class="card" style="margin-top:1rem"><div class="row"><h2>Pessoas</h2><div class="sp"></div><button class="sm" id="nu">+ Nova pessoa</button></div><div id="nf"></div>
    <table><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th></th></tr>${ps.map(p=>`<tr><td><a href="#" data-pv="${p.id}" style="color:var(--gold)">${esc(p.nome)}</a></td><td>${esc(p.usuario)}</td><td>${p.is_admin?'<span class="tag">admin</span>':""} ${p.must_change_password?'<span class="tag rd">senha provisória</span>':""} ${p.ativo?"":'<span class="tag rd">inativo</span>'}</td><td><button class="ghost sm" data-rp="${p.id}">Redefinir senha</button></td></tr>`).join("")}</table></div>
   <div class="card" style="margin-top:1rem"><div class="row"><h2>Funções e avaliadores</h2><div class="sp"></div><button class="sm" id="na">+ Nova função</button></div>
-   <table><tr><th>Pessoa</th><th>Função</th><th>Nível</th><th>Avaliador(a)</th><th>Ativa</th><th></th></tr>${as.map(a=>`<tr data-a="${a.id}"><td>${esc(pn(a.profile_id))}</td><td><input data-k="titulo" value="${esc(a.titulo)}"><div class="mut sm">${a.function_key} · ${a.track}</div></td>
+   <table><tr><th>Pessoa</th><th>Função</th><th>Nível</th><th>Avaliador(a)</th><th>Revisão</th><th>Ativa</th><th></th></tr>${as.map(a=>`<tr data-a="${a.id}"><td>${esc(pn(a.profile_id))}</td><td><input data-k="titulo" value="${esc(a.titulo)}"><div class="mut sm">${a.function_key} · ${a.track}</div></td>
    <td><select data-k="level_code"><option value="">—</option>${S.levels.map(l=>`<option value="${l.code}" ${l.code===a.level_code?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select></td>
-   <td><select data-k="evaluator_id"><option value="">—</option>${ps.map(p=>`<option value="${p.id}" ${p.id===a.evaluator_id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></td><td><input type="checkbox" data-k="ativo" ${a.ativo?"checked":""} style="width:auto"></td><td><button class="sm" data-sa="${a.id}">Salvar</button></td></tr>`).join("")}</table></div>
+   <td><select data-k="evaluator_id"><option value="">—</option>${ps.map(p=>`<option value="${p.id}" ${p.id===a.evaluator_id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></td><td><select data-k="reviewer_id"><option value="">—</option>${ps.map(p=>`<option value="${p.id}" ${p.id===a.reviewer_id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></td><td><input type="checkbox" data-k="ativo" ${a.ativo?"checked":""} style="width:auto"></td><td><button class="sm" data-sa="${a.id}">Salvar</button></td></tr>`).join("")}</table></div>
   <div class="card" style="margin-top:1rem"><div class="row"><h2>Tarefas diárias</h2><div class="sp"></div><a href="#/tarefas"><button class="sm">Gerenciar tarefas</button></a></div></div>`;
   setTimeout(()=>{const b=$("#pb");if(b)b.style.width=(evAs.length?100*(evAs.length-pendentes)/evAs.length:0)+"%"},80);
   S.charts.push(new Chart($("#bars"),{type:"bar",data:{labels:avgBy.map(x=>x.p.nome),datasets:[{data:avgBy.map(x=>x.n),backgroundColor:avgBy.map((x,i)=>i%2?"#8BA480":"#DFA624"),borderRadius:8}]},options:{animation:{duration:1300},scales:{y:{min:0,max:5}},plugins:{legend:{display:false}}}}));
@@ -288,22 +307,23 @@ async function gestaoView(){
     (adm||S.me.can_manage_tasks)?sb.from("task_templates").select("id",{count:"exact",head:true}).eq("status","rascunho"):Promise.resolve({count:null})]);
   const pn=id=>ps.find(p=>p.id===id)?.nome||"—";
   const team=ps.filter(p=>p.ativo&&!p.fora_do_plano&&as.some(a=>a.profile_id===p.id));
-  const lastOf=a=>{const e=evs.filter(x=>x.assignment_id===a.id&&x.status!=="rascunho");return e[e.length-1]};
-  const semAval=as.filter(a=>!lastOf(a)),aguard=evs.filter(e=>e.status==="enviada"&&as.some(a=>a.id===e.assignment_id));
+  const lastOf=a=>{const e=evs.filter(x=>x.assignment_id===a.id&&(x.status==="enviada"||x.status==="ciente"));return e[e.length-1]};
+  const emRev=evs.filter(e=>e.status==="revisao"&&as.some(a=>a.id===e.assignment_id));
+  const semAval=as.filter(a=>!lastOf(a)&&!emRev.some(e=>e.assignment_id===a.id)),aguard=evs.filter(e=>e.status==="enviada"&&as.some(a=>a.id===e.assignment_id));
   const avg=p=>{const n=as.filter(a=>a.profile_id===p.id).map(lastOf).filter(Boolean).map(e=>+e.nota_final);return n.length?n.reduce((x,y)=>x+y,0)/n.length:null};
   const avaliadas=as.length-semAval.length;
-  let h=`<p class="mut sm" style="margin:0">${adm?"Sócio-fundador · Responsável Técnico · Administrador":"Sócia · avalia o atendimento da recepção"}</p><h1 style="margin:.1rem 0 1rem">${esc(S.me.nome)}</h1>
+  let h=`<p class="mut sm" style="margin:0">${adm?"Sócio-fundador · Responsável Técnico · Administrador":"Sócia · avalia o administrativo (Verônica e Marcelly)"}</p><h1 style="margin:.1rem 0 1rem">${esc(S.me.nome)}</h1>
   <div class="kpis"><div class="card hi"><div class="mut sm">Equipe</div><div class="kpi" data-n="${team.length}">0</div></div>
    <div class="card"><div class="mut sm">Fichas avaliadas</div><div class="kpi"><span data-n="${avaliadas}">0</span><span class="mut" style="font-size:1rem"> / ${as.length}</span></div><div class="bar"><i data-w="${as.length?100*avaliadas/as.length:0}"></i></div></div>
    <div class="card"><div class="mut sm">Aguardando ciência</div><div class="kpi" data-n="${aguard.length}">0</div></div>
    ${tq.count!=null?`<a href="#/tarefas" class="card" style="color:inherit;text-decoration:none"><div class="mut sm">Tarefas p/ aprovar ›</div><div class="kpi" data-n="${tq.count}">0</div></a>`:`<div class="card"><div class="mut sm">Sem avaliação</div><div class="kpi" data-n="${semAval.length}">0</div></div>`}</div>
   <div class="card" style="margin-top:1rem"><h2>Notas da equipe</h2><p class="mut sm" style="margin-top:-.4rem">Média das últimas avaliações liberadas, por pessoa</p><div style="position:relative;height:${Math.max(160,team.length*44)}px"><canvas id="gb"></canvas></div></div>`;
-  if(semAval.length||aguard.length)h+=`<div class="card" style="margin-top:1rem"><h2>Pendências</h2>${aguard.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="pend"><span class="tag rd">ciência</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><b style="color:var(--gold)">${fmt(e.nota_final)}</b></div>`}).join("")}
-   ${semAval.map(a=>`<a class="pend" href="#/avaliar/${a.id}"><span class="tag">avaliar</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.evaluator_id).split(" ")[0])} ›</span></a>`).join("")}</div>`;
+  if(semAval.length||aguard.length||emRev.length)h+=`<div class="card" style="margin-top:1rem"><h2>Pendências</h2>${emRev.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<a class="pend" href="#/avaliar/${a.id}/${e.id}"><span class="tag">revisão</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.reviewer_id).split(" ")[0])} ›</span></a>`}).join("")}${aguard.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="pend"><span class="tag rd">ciência</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><b style="color:var(--gold)">${fmt(e.nota_final)}</b></div>`}).join("")}
+   ${semAval.map(a=>`<a class="pend" href="#/avaliar/${a.id}"><span class="tag">avaliar</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.evaluator_id).split(" ")[0])}${a.reviewer_id?" → "+esc(pn(a.reviewer_id).split(" ")[0]):""} ›</span></a>`).join("")}</div>`;
   h+=`<h2 style="margin:1.4rem 0 .6rem">Pessoas</h2><div class="grid">${team.map((p,i)=>{const m=avg(p);return `<div class="card pcard" style="animation-delay:${i*.06}s" ${adm?`data-pv="${p.id}"`:""}>
    <div class="row"><div class="av">${ini(p.nome)}</div><b class="sp" style="font:800 1.05rem Montserrat">${esc(p.nome)}</b><span class="kpi" style="font-size:1.3rem">${fmt(m)}</span></div>
    ${as.filter(a=>a.profile_id===p.id).map(a=>{const e=lastOf(a),lv=S.levels.find(l=>l.code===a.level_code);return `<div class="fn"><div class="row"><b class="sp sm">${esc(a.titulo)}</b>${e?`<span class="${STATUS[e.status][1]}">${fmt(e.nota_final)}</span>`:'<span class="tag rd">sem nota</span>'}</div>
-     <div class="mut sm">${a.track==="funcao"?"Função de apoio":lv?`${lv.code} · ${esc(lv.cargo)}`:"Nível a definir"} · avalia: ${esc(pn(a.evaluator_id).split(" ")[0])}</div></div>`}).join("")}
+     <div class="mut sm">${a.track==="funcao"?"Função de apoio":lv?`${lv.code} · ${esc(lv.cargo)}`:"Nível a definir"} · avalia: ${esc(pn(a.evaluator_id).split(" ")[0])}${a.reviewer_id?` · revisa: ${esc(pn(a.reviewer_id).split(" ")[0])}`:""}</div></div>`}).join("")}
    ${adm?'<div class="mut sm" style="text-align:right;margin-top:.4rem">ver painel ›</div>':""}</div>`}).join("")}</div>`;
   app.innerHTML=h;
   document.querySelectorAll("[data-n]").forEach(el=>{const n=+el.dataset.n,t0=performance.now();const f=t=>{const k=Math.min(1,(t-t0)/900);el.textContent=Math.round(n*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)});
