@@ -101,6 +101,7 @@ function careerMap(a){
 /* ---------- Meu painel ---------- */
 async function painelView(pid){
   pid=pid||S.me.id;const own=pid===S.me.id;
+  if(own&&S.me.fora_do_plano)return gestaoView();
   app.innerHTML='<div class="loader"></div>';
   const {data:prof}=await sb.from("profiles").select("*").eq("id",pid).single();
   const {data:as}=await sb.from("assignments").select("*,evaluator:evaluator_id(nome)").eq("profile_id",pid).eq("ativo",true).order("created_at");
@@ -276,5 +277,40 @@ async function tarefasView(){
   document.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const tr=b.closest("tr"),row={};tr.querySelectorAll("[data-k]").forEach(i=>row[i.dataset.k]=i.dataset.k==="xp"?+i.value:i.value.trim());
     if(!row.titulo)return toast("A tarefa não pode ficar vazia");if(b.dataset.a!=="save"){if(b.dataset.a==="arquivada"&&!confirm("Retirar esta tarefa? O histórico fica preservado."))return;row.status=b.dataset.a}
     const {error}=await sb.from("task_templates").update(row).eq("id",tr.dataset.id);toast(error?error.message:({save:"Tarefa salva",aprovada:"Tarefa aprovada ✅",arquivada:"Tarefa retirada",rascunho:"Tarefa reativada (aguardando aprovação)"})[b.dataset.a]);tarefasView()});
+}
+
+/* ---------- Visão de gestão (Izaque / sócia) ---------- */
+async function gestaoView(){
+  app.innerHTML='<div class="loader"></div>';
+  const adm=S.me.is_admin;
+  let q=sb.from("assignments").select("*").eq("ativo",true).not("evaluator_id","is",null);if(!adm)q=q.eq("evaluator_id",S.me.id);
+  const [{data:as},{data:ps},{data:evs},tq]=await Promise.all([q,sb.from("profiles").select("id,nome,fora_do_plano,ativo").order("nome"),sb.from("evaluations").select("assignment_id,nota_final,status,periodo,created_at").order("created_at"),
+    (adm||S.me.can_manage_tasks)?sb.from("task_templates").select("id",{count:"exact",head:true}).eq("status","rascunho"):Promise.resolve({count:null})]);
+  const pn=id=>ps.find(p=>p.id===id)?.nome||"—";
+  const team=ps.filter(p=>p.ativo&&!p.fora_do_plano&&as.some(a=>a.profile_id===p.id));
+  const lastOf=a=>{const e=evs.filter(x=>x.assignment_id===a.id&&x.status!=="rascunho");return e[e.length-1]};
+  const semAval=as.filter(a=>!lastOf(a)),aguard=evs.filter(e=>e.status==="enviada"&&as.some(a=>a.id===e.assignment_id));
+  const avg=p=>{const n=as.filter(a=>a.profile_id===p.id).map(lastOf).filter(Boolean).map(e=>+e.nota_final);return n.length?n.reduce((x,y)=>x+y,0)/n.length:null};
+  const avaliadas=as.length-semAval.length;
+  let h=`<p class="mut sm" style="margin:0">${adm?"Sócio-fundador · Responsável Técnico · Administrador":"Sócia · avalia o atendimento da recepção"}</p><h1 style="margin:.1rem 0 1rem">${esc(S.me.nome)}</h1>
+  <div class="kpis"><div class="card hi"><div class="mut sm">Equipe</div><div class="kpi" data-n="${team.length}">0</div></div>
+   <div class="card"><div class="mut sm">Fichas avaliadas</div><div class="kpi"><span data-n="${avaliadas}">0</span><span class="mut" style="font-size:1rem"> / ${as.length}</span></div><div class="bar"><i data-w="${as.length?100*avaliadas/as.length:0}"></i></div></div>
+   <div class="card"><div class="mut sm">Aguardando ciência</div><div class="kpi" data-n="${aguard.length}">0</div></div>
+   ${tq.count!=null?`<a href="#/tarefas" class="card" style="color:inherit;text-decoration:none"><div class="mut sm">Tarefas p/ aprovar ›</div><div class="kpi" data-n="${tq.count}">0</div></a>`:`<div class="card"><div class="mut sm">Sem avaliação</div><div class="kpi" data-n="${semAval.length}">0</div></div>`}</div>
+  <div class="card" style="margin-top:1rem"><h2>Notas da equipe</h2><p class="mut sm" style="margin-top:-.4rem">Média das últimas avaliações liberadas, por pessoa</p><div style="position:relative;height:${Math.max(160,team.length*44)}px"><canvas id="gb"></canvas></div></div>`;
+  if(semAval.length||aguard.length)h+=`<div class="card" style="margin-top:1rem"><h2>Pendências</h2>${aguard.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="pend"><span class="tag rd">ciência</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><b style="color:var(--gold)">${fmt(e.nota_final)}</b></div>`}).join("")}
+   ${semAval.map(a=>`<a class="pend" href="#/avaliar/${a.id}"><span class="tag">avaliar</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.evaluator_id).split(" ")[0])} ›</span></a>`).join("")}</div>`;
+  h+=`<h2 style="margin:1.4rem 0 .6rem">Pessoas</h2><div class="grid">${team.map((p,i)=>{const m=avg(p);return `<div class="card pcard" style="animation-delay:${i*.06}s" ${adm?`data-pv="${p.id}"`:""}>
+   <div class="row"><div class="av">${ini(p.nome)}</div><b class="sp" style="font:800 1.05rem Montserrat">${esc(p.nome)}</b><span class="kpi" style="font-size:1.3rem">${fmt(m)}</span></div>
+   ${as.filter(a=>a.profile_id===p.id).map(a=>{const e=lastOf(a),lv=S.levels.find(l=>l.code===a.level_code);return `<div class="fn"><div class="row"><b class="sp sm">${esc(a.titulo)}</b>${e?`<span class="${STATUS[e.status][1]}">${fmt(e.nota_final)}</span>`:'<span class="tag rd">sem nota</span>'}</div>
+     <div class="mut sm">${a.track==="funcao"?"Função de apoio":lv?`${lv.code} · ${esc(lv.cargo)}`:"Nível a definir"} · avalia: ${esc(pn(a.evaluator_id).split(" ")[0])}</div></div>`}).join("")}
+   ${adm?'<div class="mut sm" style="text-align:right;margin-top:.4rem">ver painel ›</div>':""}</div>`}).join("")}</div>`;
+  app.innerHTML=h;
+  document.querySelectorAll("[data-n]").forEach(el=>{const n=+el.dataset.n,t0=performance.now();const f=t=>{const k=Math.min(1,(t-t0)/900);el.textContent=Math.round(n*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)});
+  setTimeout(()=>document.querySelectorAll("[data-w]").forEach(el=>el.style.width=el.dataset.w+"%"),80);
+  const vals=team.map(avg);
+  S.charts.push(new Chart($("#gb"),{type:"bar",data:{labels:team.map(p=>p.nome),datasets:[{data:vals.map(v=>v??0),backgroundColor:vals.map(v=>v==null?"#333":v>=4?"#8BA480":"#DFA624"),borderRadius:8,barThickness:22}]},
+   options:{indexAxis:"y",maintainAspectRatio:false,animation:{duration:1400,easing:"easeOutQuart"},scales:{x:{min:0,max:5,ticks:{stepSize:1}},y:{grid:{display:false}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>vals[c.dataIndex]==null?"sem avaliação":"nota "+fmt(vals[c.dataIndex])}}}}}));
+  document.querySelectorAll("[data-pv]").forEach(x=>x.onclick=()=>{killCharts();painelView(x.dataset.pv)});
 }
 boot();
