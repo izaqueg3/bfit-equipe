@@ -50,3 +50,5 @@ nav{min-width:0}
 @keyframes pop{50%{transform:scale(1.35)}}
 .achs{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem}.ach{background:#111;border:1px solid var(--line);border-radius:14px;padding:.6rem;text-align:center;display:flex;flex-direction:column;gap:.15rem;opacity:.4;filter:grayscale(1)}.ach.on{opacity:1;filter:none;border-color:rgba(223,166,36,.5)}.ach .ai{font-size:1.5rem}
 @media(max-width:640px){.achs{grid-template-columns:repeat(2,1fr)}.ckhero{justify-content:center}}
+.turno{text-align:center}.turno .ti{font-size:2.4rem}.turno p{max-width:420px;margin-left:auto;margin-right:auto}button.big{width:100%;padding:1rem;font-size:1.05rem;border-radius:16px}
+.task.ro{cursor:default}.task.ro .chk{border-style:dashed;color:var(--mut)}
