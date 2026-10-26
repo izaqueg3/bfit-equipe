@@ -32,7 +32,7 @@ async function boot(){
 }
 async function logout(){await sb.auth.signOut();location.hash="";location.reload()}
 function nav(cur){
-  const it=[["#/painel","Meu painel"]];if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin||S.me.can_manage_tasks)it.push(["#/tarefas","Tarefas"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha"]);
+  const it=[["#/painel","Meu painel"]];if(!S.me.fora_do_plano)it.push(["#/checklist","Checklist"]);if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin||S.me.can_manage_tasks)it.push(["#/tarefas","Tarefas"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha"]);
   $("#nav").innerHTML=it.map(([h,t])=>`<a href="${h}" class="${cur.startsWith(h)?"on":""}">${t}</a>`).join("");
 }
 function route(){killCharts();const h=location.hash||"#/painel";nav(h);const p=h.split("/");
@@ -43,6 +43,7 @@ function route(){killCharts();const h=location.hash||"#/painel";nav(h);const p=h
   if(p[1]==="tarefas")return tarefasView();
   if(p[1]==="senha")return pwView(false);
   if(p[1]==="ver")return verView(p[2]);
+  if(p[1]==="checklist")return checklistView(p[2]);
   return painelView();
 }
 
@@ -111,7 +112,7 @@ async function painelView(pid){
   const xp=own?(await sb.rpc("my_xp_rank")).data?.[0]:null;
   const pend=(evs||[]).filter(e=>e.status==="enviada");
   let h=`<div class="row"><div><p class="mut sm" style="margin:0">${own?"Olá,":"Painel de"}</p><h1 style="margin:0 0 1rem">${esc(prof?.nome)}</h1></div><div class="sp"></div>
-   ${own?`<div class="card" style="padding:.7rem 1rem"><div class="mut sm">Meu XP da semana · posição privada</div><div class="row"><span class="kpi">${xp?.xp??0}</span><span class="tag">${xp?`${xp.posicao}º de ${xp.total}`:"—"}</span></div><div class="mut sm">Checklist gamificado chega na fase 2</div></div>`:""}</div>`;
+   ${own?`<div class="card" style="padding:.7rem 1rem"><div class="mut sm">Meu XP da semana · posição privada</div><div class="row"><span class="kpi">${xp?.xp??0}</span><span class="tag">${xp?`${xp.posicao}º de ${xp.total}`:"—"}</span></div><a href="#/checklist" class="sm" style="color:var(--gold)">Abrir checklist de hoje ›</a></div>`:""}</div>`;
   if(own&&pend.length)h+=`<div class="card hi" style="margin-bottom:1rem"><h2>📩 Você tem ${pend.length} avaliação(ões) para dar ciência</h2>${pend.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="row" style="margin:.5rem 0"><span>${esc(a?.titulo)} · ${esc(e.periodo)} · nota <b style="color:var(--gold)">${fmt(e.nota_final)}</b></span><div class="sp"></div><a href="#/ver/${e.id}"><button class="sm">Ver e dar ciência</button></a></div>`}).join("")}</div>`;
   h+=`<div class="grid">`;
   (as||[]).forEach((a,i)=>{const my=(evs||[]).filter(e=>e.assignment_id===a.id);const last=my[my.length-1];const lv=S.levels.find(l=>l.code===a.level_code);
@@ -154,6 +155,8 @@ async function evalListView(){
   const [{data:as},{data:sc},{data:evs}]=await Promise.all([q,sb.from("service_contracts").select("*").eq("ativo",true),sb.from("evaluations").select("id,assignment_id,status,nota_final,periodo")]);
   const groups={};(as||[]).forEach(a=>{const k=(!S.me.is_admin&&a.reviewer_id===S.me.id)?"__rev":a.evaluator?.nome||"—";(groups[k]=groups[k]||[]).push(a)});
   let h=`<h1>Avaliar</h1><p class="mut">Uma ficha por função. A nota final é calculada sozinha com os pesos 25/25/20/15/15.</p><div class="grid">`;
+  const tc=(await sb.rpc("team_checklist",{desde:spDay(),ate:spDay()})).data||[];
+  if(tc.length)h+=`<div class="card list"><h3>Checklist de hoje</h3>${tc.map(r=>`<a class="item" href="#/checklist/${r.profile_id}"><div class="av">${ini(r.nome)}</div><div class="sp"><b>${esc(r.nome)}</b><div class="bar" style="margin-top:.3rem"><i style="width:${r.esperadas?Math.min(100,100*r.feitas/r.esperadas):0}%"></i></div></div><span class="mut sm">${r.feitas}/${r.esperadas}${r.pendentes_validacao?` · <span class="tag">${r.pendentes_validacao} p/ validar</span>`:""}</span></a>`).join("")}</div>`;
   for(const [ev,list] of Object.entries(groups)){
     h+=`<div class="card list"><h3>${ev==="__rev"?"Revisar · 2ª etapa":S.me.is_admin?`Avaliador(a): ${esc(ev)}`:"Quem eu avalio"}</h3>${list.map(a=>{const e=(evs||[]).filter(x=>x.assignment_id===a.id);const last=e[e.length-1];
       return `<a class="item" href="#/avaliar/${a.id}"><div class="av">${ini(a.profile?.nome)}</div><div class="sp"><b>${esc(a.profile?.nome)}</b><div class="mut sm">${esc(a.titulo)}${a.level_code?" · "+a.level_code:""}${a.reviewer?` · avalia ${esc(a.evaluator?.nome)}, revisa ${esc(a.reviewer.nome)}`:""}</div></div>${last?`<span class="${STATUS[last.status][1]}">${fmt(last.nota_final)}</span>`:'<span class="tag rd">pendente</span>'}</a>`}).join("")}</div>`}
@@ -320,6 +323,12 @@ async function gestaoView(){
   <div class="card" style="margin-top:1rem"><h2>Notas da equipe</h2><p class="mut sm" style="margin-top:-.4rem">Média das últimas avaliações liberadas, por pessoa</p><div style="position:relative;height:${Math.max(160,team.length*44)}px"><canvas id="gb"></canvas></div></div>`;
   if(semAval.length||aguard.length||emRev.length)h+=`<div class="card" style="margin-top:1rem"><h2>Pendências</h2>${emRev.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<a class="pend" href="#/avaliar/${a.id}/${e.id}"><span class="tag">revisão</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.reviewer_id).split(" ")[0])} ›</span></a>`}).join("")}${aguard.map(e=>{const a=as.find(x=>x.id===e.assignment_id);return `<div class="pend"><span class="tag rd">ciência</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><b style="color:var(--gold)">${fmt(e.nota_final)}</b></div>`}).join("")}
    ${semAval.map(a=>`<a class="pend" href="#/avaliar/${a.id}"><span class="tag">avaliar</span><span class="sp">${esc(pn(a.profile_id))} · ${esc(a.titulo)}</span><span class="mut sm">${esc(pn(a.evaluator_id).split(" ")[0])}${a.reviewer_id?" → "+esc(pn(a.reviewer_id).split(" ")[0]):""} ›</span></a>`).join("")}</div>`;
+  const wk=weekDays(),tcl=(await sb.rpc("team_checklist",{desde:wk[0],ate:spDay()})).data||[];
+  const tPeople=[...new Map(tcl.map(r=>[r.profile_id,r.nome])).entries()];
+  const tStat=pid=>{const rs=tcl.filter(r=>r.profile_id===pid),hj=rs.find(r=>r.data===spDay())||{feitas:0,esperadas:0,pendentes_validacao:0};const f=rs.reduce((a,r)=>a+ +r.feitas,0),e=rs.reduce((a,r)=>a+ +r.esperadas,0);return {hj,sem:e?100*f/e:0,xp:rs.reduce((a,r)=>a+ +r.xp,0),pv:rs.reduce((a,r)=>a+ +r.pendentes_validacao,0)}};
+  if(tPeople.length)h+=`<div class="card" style="margin-top:1rem"><h2>Checklist da equipe</h2><p class="mut sm" style="margin-top:-.4rem">Hoje e semana (seg→hoje) · fuso de São Paulo</p>
+   ${tPeople.map(([pid,nome])=>{const t=tStat(pid),pd=t.hj.esperadas?Math.min(100,100*t.hj.feitas/t.hj.esperadas):0;return `<a class="pend" href="#/checklist/${pid}" style="display:block"><div class="row"><b class="sp">${esc(nome)}</b><span class="mut sm">hoje ${t.hj.feitas}/${t.hj.esperadas} · semana ${Math.round(t.sem)}%${t.pv?` · <span class="tag">${t.pv} p/ validar</span>`:""} ›</span></div><div class="bar" style="margin-top:.35rem"><i data-w="${pd}"></i></div></a>`}).join("")}
+   <div style="position:relative;height:${Math.max(160,tPeople.length*40)}px;margin-top:.8rem"><canvas id="gw"></canvas></div></div>`;
   h+=`<h2 style="margin:1.4rem 0 .6rem">Pessoas</h2><div class="grid">${team.map((p,i)=>{const m=avg(p);return `<div class="card pcard" style="animation-delay:${i*.06}s" ${adm?`data-pv="${p.id}"`:""}>
    <div class="row"><div class="av">${ini(p.nome)}</div><b class="sp" style="font:800 1.05rem Montserrat">${esc(p.nome)}</b><span class="kpi" style="font-size:1.3rem">${fmt(m)}</span></div>
    ${as.filter(a=>a.profile_id===p.id).map(a=>{const e=lastOf(a),lv=S.levels.find(l=>l.code===a.level_code);return `<div class="fn"><div class="row"><b class="sp sm">${esc(a.titulo)}</b>${e?`<span class="${STATUS[e.status][1]}">${fmt(e.nota_final)}</span>`:'<span class="tag rd">sem nota</span>'}</div>
@@ -332,5 +341,60 @@ async function gestaoView(){
   S.charts.push(new Chart($("#gb"),{type:"bar",data:{labels:team.map(p=>p.nome),datasets:[{data:vals.map(v=>v??0),backgroundColor:vals.map(v=>v==null?"#333":v>=4?"#8BA480":"#DFA624"),borderRadius:8,barThickness:22}]},
    options:{indexAxis:"y",maintainAspectRatio:false,animation:{duration:1400,easing:"easeOutQuart"},scales:{x:{min:0,max:5,ticks:{stepSize:1}},y:{grid:{display:false}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>vals[c.dataIndex]==null?"sem avaliação":"nota "+fmt(vals[c.dataIndex])}}}}}));
   document.querySelectorAll("[data-pv]").forEach(x=>x.onclick=()=>{killCharts();painelView(x.dataset.pv)});
+  if($("#gw"))S.charts.push(new Chart($("#gw"),{type:"bar",data:{labels:tPeople.map(x=>x[1]),datasets:[{label:"Semana %",data:tPeople.map(x=>Math.round(tStat(x[0]).sem)),backgroundColor:"#DFA624",borderRadius:8,barThickness:18}]},options:{indexAxis:"y",maintainAspectRatio:false,animation:{duration:1400,easing:"easeOutQuart"},scales:{x:{min:0,max:100,ticks:{callback:v=>v+"%"}},y:{grid:{display:false}}},plugins:{legend:{display:false},title:{display:true,text:"Cumprimento da semana (%)"}}}}));
+}
+
+/* ---------- Fase 2 · Checklist diário ---------- */
+const spDay=(d=new Date())=>d.toLocaleDateString("sv-SE",{timeZone:"America/Sao_Paulo"});
+const addDays=(ds,n)=>{const d=new Date(ds+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
+const weekDays=()=>{const t=spDay(),w=(new Date(t+"T12:00:00Z").getUTCDay()+6)%7;return Array.from({length:7},(_,i)=>addDays(t,i-w))};
+const DOW=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+function pring(pct,big,small){const r=62,c=2*Math.PI*r,id="p"+Math.random().toString(36).slice(2);
+  setTimeout(()=>{const el=document.getElementById(id);if(el)el.style.strokeDashoffset=c*(1-Math.min(pct,100)/100)},60);
+  return `<div class="ring"><svg width="150" height="150"><defs><linearGradient id="g${id}"><stop offset="0" stop-color="#8BA480"/><stop offset="1" stop-color="#DFA624"/></linearGradient></defs><circle cx="75" cy="75" r="${r}" fill="none" stroke="#222" stroke-width="12"/><circle id="${id}" cx="75" cy="75" r="${r}" fill="none" stroke="url(#g${id})" stroke-width="12" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c}"/></svg><div class="v"><div><b>${big}</b><div class="mut sm">${small}</div></div></div></div>`}
+async function checklistView(pid){
+  pid=pid||S.me.id;const own=pid===S.me.id;
+  if(own&&S.me.fora_do_plano)return gestaoView();
+  app.innerHTML='<div class="loader"></div>';
+  const today=spDay(),from=addDays(today,-60);
+  const [{data:prof},{data:as}]=await Promise.all([sb.from("profiles").select("id,nome").eq("id",pid).single(),sb.from("assignments").select("id,function_key,titulo").eq("profile_id",pid).eq("ativo",true)]);
+  const fks=[...new Set((as||[]).map(a=>a.function_key))];
+  const [{data:ts},{data:en},xr]=await Promise.all([fks.length?sb.from("task_templates").select("*").eq("status","aprovada").in("function_key",fks).order("ordem"):{data:[]},
+    sb.from("checklist_entries").select("*").eq("profile_id",pid).gte("data",from).order("created_at"),own?sb.rpc("my_xp_rank"):Promise.resolve({data:null})]);
+  const E=en||[],T=ts||[],exp=T.length,xp=e=>(e.tipo==="obrigatoria"||e.validado_por)?e.xp:0;
+  const day=d=>E.filter(e=>e.data===d),done=d=>day(d).filter(e=>e.tipo==="obrigatoria").length;
+  const met=d=>exp?done(d)>=Math.ceil(exp/2):day(d).length>0;
+  let streak=0,d0=met(today)?today:addDays(today,-1);while(met(d0)&&streak<61){streak++;d0=addDays(d0,-1)}
+  const hj=day(today),feitas=done(today),pct=exp?100*feitas/exp:0,xpHoje=hj.reduce((a,e)=>a+xp(e),0);
+  const wk=weekDays(),xpW=wk.map(d=>day(d).reduce((a,e)=>a+xp(e),0));
+  const days=[...new Set(E.map(e=>e.data))],xpTot=E.reduce((a,e)=>a+xp(e),0),pv=E.filter(e=>e.tipo==="proativa"&&e.validado_por).length;
+  const ach=[["🚀","Primeiro passo","Concluiu a 1ª tarefa",E.length>0],["💯","Dia perfeito","100% das obrigatórias num dia",exp>0&&days.some(d=>done(d)>=exp)],
+    ["🔥","Sequência de 3","3 dias seguidos",streak>=3],["🏆","Semana de ferro","7 dias seguidos",streak>=7],["💡","Proativo(a)","3 proatividades validadas",pv>=3],["⭐","500 XP","500 XP em 60 dias",xpTot>=500]];
+  const byF={};T.forEach(t=>(byF[t.function_key]=byF[t.function_key]||[]).push(t));
+  const fname=k=>(as||[]).find(a=>a.function_key===k)?.titulo||FUNCS[k]||k;
+  const xr0=xr.data?.[0];
+  let h=`${own?"":`<a href="javascript:history.back()" class="mut sm">← voltar</a>`}<p class="mut sm" style="margin:0">${own?"Checklist de hoje":"Checklist de"} · ${new Date(today+"T12:00:00Z").toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long",timeZone:"UTC"})}</p><h1 style="margin:.1rem 0 1rem">${esc(prof?.nome)}</h1>
+  <div class="card hi ckhero"><div>${pring(pct,`${feitas}/${exp}`,"tarefas hoje")}</div><div class="ckstats">
+   <div><span class="mut sm">XP hoje</span><b class="kpi" data-n="${xpHoje}">0</b></div><div><span class="mut sm">Sequência</span><b class="kpi">🔥 <span data-n="${streak}">0</span></b><span class="mut sm">dia(s)</span></div>
+   ${own?`<div><span class="mut sm">XP da semana · posição privada</span><b class="kpi" data-n="${xr0?.xp??0}">0</b><span class="tag">${xr0?`${xr0.posicao}º de ${xr0.total}`:"—"}</span></div>`:""}</div></div>`;
+  if(!exp)h+=`<div class="card" style="margin-top:1rem"><p class="mut">Ainda não há tarefas aprovadas para ${own?"sua função":"esta função"}. ${own?"Registre suas proatividades abaixo.":""}</p></div>`;
+  for(const [k,list] of Object.entries(byF))h+=`<div class="card" style="margin-top:1rem"><div class="row"><h2 class="sp" style="margin:0">${esc(fname(k))}</h2><span class="mut sm">${list.filter(t=>hj.some(e=>e.template_id===t.id)).length}/${list.length}</span></div>
+   ${list.map(t=>{const ok=hj.some(e=>e.template_id===t.id);return `<button type="button" class="task ${ok?"ok":""}" data-t="${t.id}" ${own?"":"disabled"}><span class="chk">${ok?"✓":""}</span><span class="sp">${esc(t.titulo)}</span><span class="xp">+${t.xp} XP</span></button>`}).join("")}</div>`;
+  const pro=E.filter(e=>e.tipo==="proativa"&&(own?e.data===today:e.data>=addDays(today,-7))).reverse();
+  h+=`<div class="card" style="margin-top:1rem"><h2>💡 Proatividade</h2><p class="mut sm" style="margin-top:-.4rem">+10 XP cada, após validação de quem te avalia</p>
+   ${own?`<div class="row" style="flex-wrap:nowrap"><input id="pt" placeholder="O que você fez além do combinado?"><button id="pb2">Registrar</button></div>`:""}
+   ${pro.map(e=>`<div class="pend"><span class="${e.validado_por?"tag ol":"tag"}">${e.validado_por?"validada":"aguardando"}</span><span class="sp sm">${esc(e.descricao)}${own?"":` <span class="mut">· ${e.data.split("-").reverse().slice(0,2).join("/")}</span>`}</span>${!own?`<button class="sm ${e.validado_por?"ghost":""}" data-v="${e.id}" data-on="${e.validado_por?0:1}">${e.validado_por?"Desfazer":"Validar"}</button>`:(!e.validado_por?`<button class="sm ghost" data-del="${e.id}">✕</button>`:"")}</div>`).join("")||'<p class="mut sm">Nenhuma registrada'+(own?" hoje":" nos últimos 7 dias")+'.</p>'}</div>
+  <div class="card" style="margin-top:1rem"><h2>Semana</h2><div style="position:relative;height:190px"><canvas id="wk"></canvas></div></div>
+  <div class="card" style="margin-top:1rem"><h2>Conquistas</h2><div class="achs">${ach.map(([i,n,d,ok])=>`<div class="ach ${ok?"on":""}"><div class="ai">${i}</div><b>${n}</b><span class="mut sm">${d}</span></div>`).join("")}</div></div>`;
+  app.innerHTML=h;
+  document.querySelectorAll("[data-n]").forEach(el=>{const n=+el.dataset.n,t0=performance.now();const f=t=>{const k=Math.min(1,(t-t0)/900);el.textContent=Math.round(n*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)});
+  S.charts.push(new Chart($("#wk"),{type:"bar",data:{labels:DOW,datasets:[{data:xpW,backgroundColor:wk.map(d=>d===today?"#DFA624":"#8BA480"),borderRadius:8}]},options:{maintainAspectRatio:false,animation:{duration:1200,easing:"easeOutQuart"},scales:{y:{beginAtZero:true,title:{display:true,text:"XP"}}},plugins:{legend:{display:false}}}}));
+  if(own){
+    document.querySelectorAll("[data-t]").forEach(b=>b.onclick=async()=>{b.disabled=true;const ex=hj.find(e=>e.template_id===b.dataset.t);
+      const r=ex?await sb.from("checklist_entries").delete().eq("id",ex.id):await sb.from("checklist_entries").insert({template_id:b.dataset.t,tipo:"obrigatoria",profile_id:S.me.id});
+      if(r.error){b.disabled=false;return toast(r.error.message)}if(!ex){b.classList.add("ok","pop");if(feitas+1===exp)toast("💯 Dia perfeito! Todas as tarefas concluídas")}setTimeout(()=>checklistView(),ex?0:350)});
+    $("#pb2").onclick=async()=>{const t=$("#pt").value.trim();if(!t)return toast("Descreva o que você fez");const {error}=await sb.from("checklist_entries").insert({tipo:"proativa",descricao:t,profile_id:S.me.id});toast(error?error.message:"Proatividade registrada · aguardando validação");if(!error)checklistView()};
+    document.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{const {error}=await sb.from("checklist_entries").delete().eq("id",b.dataset.del);toast(error?error.message:"Removida");checklistView()});
+  } else document.querySelectorAll("[data-v]").forEach(b=>b.onclick=async()=>{const on=b.dataset.on==="1";const {error}=await sb.from("checklist_entries").update({validado_por:on?S.me.id:null}).eq("id",b.dataset.v);toast(error?error.message:on?"Validada · +10 XP":"Validação desfeita");checklistView(pid)});
 }
 boot();
