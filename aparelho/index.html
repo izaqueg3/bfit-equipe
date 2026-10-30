@@ -1,0 +1,31 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B Fit · Instalar aparelho de checklist</title><link rel="icon" href="../icon-192.png">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>body{margin:0;background:#0a0a0a;color:#eee;font:16px/1.55 system-ui,sans-serif}main{max-width:760px;margin:auto;padding:1.2rem}
+h1{color:#DFA624;margin:.2rem 0 1rem}h2{color:#8BA480;font-size:1.1rem;margin:1.6rem 0 .4rem}.card{background:#1c1c1c;border:1px solid #2a2a2a;border-radius:14px;padding:1rem 1.2rem;margin:.8rem 0}
+.row{display:flex;gap:1rem;flex-wrap:wrap}.row .card{flex:1;min-width:250px}b.g{color:#DFA624}code{background:#000;padding:.1rem .35rem;border-radius:5px}
+esp-web-install-button button{background:#DFA624;color:#0a0a0a;border:0;border-radius:10px;padding:.75rem 1.2rem;font-weight:700;font-size:1rem;cursor:pointer}
+.mut{color:#999;font-size:.9rem}li{margin:.25rem 0}a{color:#DFA624}</style></head><body><main>
+<img src="../logo.png" alt="B Fit" style="height:46px"><h1>Aparelho de checklist do turno</h1>
+<p>Placa ESP32 “tela amarela” (ESP32-2432S028R, 2,8”). Use o <b>Chrome ou Edge no computador</b> com a placa ligada no USB.</p>
+<h2>1. Instalar</h2>
+<div class="row"><div class="card"><b class="g">Placa com 1 USB (micro-USB)</b><p class="mut">Versão mais comum · tela ILI9341</p>
+<esp-web-install-button manifest="manifest-ili9341.json"><button slot="activate">Instalar nesta placa</button><span slot="unsupported">Navegador sem suporte: use Chrome ou Edge no computador.</span><span slot="not-allowed">Abra esta página por https.</span></esp-web-install-button></div>
+<div class="card"><b class="g">Placa com 2 USB (micro + USB-C)</b><p class="mut">Versão “2USB” · tela ST7789</p>
+<esp-web-install-button manifest="manifest-st7789.json"><button slot="activate">Instalar nesta placa</button><span slot="unsupported">Navegador sem suporte: use Chrome ou Edge no computador.</span><span slot="not-allowed">Abra esta página por https.</span></esp-web-install-button></div></div>
+<p class="mut">Não sabe a versão? Instale a de 1 USB. Se a tela ficar com cores invertidas, embaralhadas ou branca, instale a outra.</p>
+<div class="card"><b>A placa não aparece na lista?</b> Instale o driver <b>CH340</b> (<a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">Windows</a> · <a href="https://www.wch-ic.com/downloads/CH341SER_MAC_ZIP.html" target="_blank" rel="noopener">Mac</a>), troque o cabo (alguns só carregam) e tente de novo. Se travar em “Conectando”, segure o botão <b>BOOT</b> da placa enquanto clica em Instalar.</div>
+<h2>2. Gerar o token do aparelho</h2>
+<ol><li>No app, entre como admin → <b>Admin → Aparelhos de checklist → + Gerar token</b>.</li><li>Copie o token. Ele aparece <b>uma única vez</b> — se perder, revogue e gere outro.</li></ol>
+<h2>3. Configurar Wi-Fi e token</h2>
+<ol><li>Ligue a placa. Na primeira vez ela pede para <b>tocar no centro de duas cruzes</b> (calibração do toque).</li>
+<li>No celular, conecte na rede Wi-Fi <b>BFit-Checklist</b>. A página de configuração abre sozinha (ou acesse <code>192.168.4.1</code>).</li>
+<li>Toque em <b>Configure WiFi</b>, escolha a rede da academia, digite a senha e cole o <b>token</b>. Salve.</li>
+<li>O aparelho conecta, acerta o relógio e mostra os nomes da equipe.</li></ol>
+<h2>4. Uso pela equipe</h2>
+<ul><li>Cada pessoa cadastra seu <b>PIN (4 a 6 números)</b> no app em <b>Senha e PIN</b>.</li>
+<li>No aparelho: toque no nome → PIN → <b>Iniciar turno</b> (vê as tarefas e guarda o celular) ou <b>Fechar turno</b> (marca o que fez, proatividade opcional e conclui).</li>
+<li>5 PINs errados bloqueiam aquela pessoa por 15 min. Sem toque por 60 s, o aparelho volta à tela inicial.</li></ul>
+<h2>Reconfigurar (trocar Wi-Fi ou token, recalibrar)</h2>
+<p>Desligue e ligue a placa <b>segurando o dedo na tela</b> até aparecer “Ajustes”. Solte e escolha <b>Reconfigurar Wi-Fi/token</b> ou <b>Calibrar toque</b>. Aparelho perdido ou roubado: em Admin, clique <b>Revogar</b> — ele para na hora.</p>
+<p class="mut">Firmware v1.0.0 · código em <code>esp32/</code> no repositório.</p></main></body></html>

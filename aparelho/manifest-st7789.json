@@ -1,0 +1,1 @@
+{"name":"B Fit Checklist (st7789)","version":"1.0.0","new_install_prompt_erase":true,"builds":[{"chipFamily":"ESP32","parts":[{"path":"bfit-cyd_st7789.bin","offset":0}]}]}

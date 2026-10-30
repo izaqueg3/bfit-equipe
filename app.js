@@ -32,7 +32,7 @@ async function boot(){
 }
 async function logout(){await sb.auth.signOut();location.hash="";location.reload()}
 function nav(cur){
-  const it=[["#/painel","Meu painel"]];if(!S.me.fora_do_plano)it.push(["#/checklist","Checklist"]);if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin||S.me.can_manage_tasks)it.push(["#/tarefas","Tarefas"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha"]);
+  const it=[["#/painel","Meu painel"]];if(!S.me.fora_do_plano)it.push(["#/checklist","Checklist"]);if(S.isEval)it.push(["#/avaliar","Avaliar"]);if(S.me.is_admin||S.me.can_manage_tasks)it.push(["#/tarefas","Tarefas"]);if(S.me.is_admin)it.push(["#/admin","Admin"]);it.push(["#/senha","Senha e PIN"]);
   $("#nav").innerHTML=it.map(([h,t])=>`<a href="${h}" class="${cur.startsWith(h)?"on":""}">${t}</a>`).join("");
 }
 function route(){killCharts();const h=location.hash||"#/painel";nav(h);const p=h.split("/");
@@ -67,6 +67,18 @@ function pwView(force){
   $("#f").onsubmit=async e=>{e.preventDefault();if($("#a").value!==$("#b").value){$("#e").textContent="As senhas não conferem.";return}
     const {error}=await sb.auth.updateUser({password:$("#a").value});if(error){$("#e").textContent=error.message;return}
     await sb.rpc("mark_password_changed");toast("Senha salva");if(force)location.reload();else location.hash="#/painel"}
+  if(!force&&!S.me.fora_do_plano)pinBox();
+}
+async function pinBox(){
+  const {data:tem}=await sb.rpc("my_pin_status");
+  app.insertAdjacentHTML("beforeend",`<form class="card login" id="fp" style="margin-top:1rem"><h2>PIN do aparelho</h2>
+  <p class="mut sm">Use no aparelho de checklist da academia (tela amarela). 4 a 6 números, só seu. ${tem?'<span class="tag ol">PIN cadastrado</span>':'<span class="tag rd">sem PIN</span>'}</p>
+  <label class="t">Novo PIN</label><input id="pa" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" required autocomplete="off">
+  <label class="t">Repita o PIN</label><input id="pinb" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" required autocomplete="off"><p></p>
+  <button style="width:100%">${tem?"Trocar PIN":"Cadastrar PIN"}</button><p id="pe" class="mut sm"></p></form>`);
+  $("#fp").onsubmit=async e=>{e.preventDefault();if($("#pa").value!==$("#pinb").value){$("#pe").textContent="Os PINs não conferem.";return}
+    const {error}=await sb.rpc("set_my_pin",{pin:$("#pa").value});if(error){$("#pe").textContent=error.message;return}
+    toast("PIN salvo");$("#fp").remove();pinBox()}
 }
 
 /* ---------- Componentes ---------- */
@@ -245,6 +257,7 @@ async function serviceView(cid){
 async function adminView(){
   if(!S.me.is_admin){location.hash="#/painel";return}
   const [{data:ps},{data:as},{data:evs},{data:ts}]=await Promise.all([sb.from("profiles").select("*").order("nome"),sb.from("assignments").select("*").order("created_at"),sb.from("evaluations").select("assignment_id,nota_final,status,periodo"),sb.from("task_templates").select("*").order("function_key").order("ordem")]);
+  const [{data:pins},{data:devs}]=await Promise.all([sb.rpc("admin_pin_list"),sb.from("kiosk_devices").select("id,nome,created_at,ultimo_uso,revogado_em").order("created_at",{ascending:false})]);
   const pn=id=>ps.find(p=>p.id===id)?.nome||"—";
   const done=(evs||[]).filter(e=>e.status==="enviada"||e.status==="ciente");
   const avgBy=ps.filter(p=>as.some(a=>a.profile_id===p.id&&a.evaluator_id)).map(p=>{const ids=as.filter(a=>a.profile_id===p.id).map(a=>a.id);const n=done.filter(e=>ids.includes(e.assignment_id)).map(e=>+e.nota_final);return {p,n:n.length?n.reduce((a,b)=>a+b,0)/n.length:0}});
@@ -254,7 +267,9 @@ async function adminView(){
   <div class="card"><div class="mut sm">Fichas sem avaliação</div><div class="kpi">${pendentes}</div><div class="bar"><i id="pb"></i></div></div><div class="card"><div class="mut sm">Aguardando ciência</div><div class="kpi">${(evs||[]).filter(e=>e.status==="enviada").length}</div></div></div>
   <div class="card" style="margin-top:1rem"><h2>Nota média por pessoa</h2><canvas id="bars" height="90"></canvas></div>
   <div class="card" style="margin-top:1rem"><div class="row"><h2>Pessoas</h2><div class="sp"></div><button class="sm" id="nu">+ Nova pessoa</button></div><div id="nf"></div>
-   <table><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th></th></tr>${ps.map(p=>`<tr><td><a href="#" data-pv="${p.id}" style="color:var(--gold)">${esc(p.nome)}</a></td><td>${esc(p.usuario)}</td><td>${p.is_admin?'<span class="tag">admin</span>':""} ${p.must_change_password?'<span class="tag rd">senha provisória</span>':""} ${p.ativo?"":'<span class="tag rd">inativo</span>'}</td><td><button class="ghost sm" data-rp="${p.id}">Redefinir senha</button></td></tr>`).join("")}</table></div>
+   <table><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th></th></tr>${ps.map(p=>`<tr><td><a href="#" data-pv="${p.id}" style="color:var(--gold)">${esc(p.nome)}</a></td><td>${esc(p.usuario)}</td><td>${p.is_admin?'<span class="tag">admin</span>':""} ${p.must_change_password?'<span class="tag rd">senha provisória</span>':""} ${p.ativo?"":'<span class="tag rd">inativo</span>'}</td><td><button class="ghost sm" data-rp="${p.id}">Redefinir senha</button> ${pins.find(x=>x.profile_id===p.id)?.tem_pin?`<button class="ghost sm" data-rpin="${p.id}">Apagar PIN</button>`:'<span class="mut sm">sem PIN</span>'}</td></tr>`).join("")}</table></div>
+  <div class="card" style="margin-top:1rem"><div class="row"><h2>Aparelhos de checklist</h2><div class="sp"></div><a href="/aparelho/" target="_blank"><button class="ghost sm">Instalar firmware</button></a> <button class="sm" id="nd">+ Gerar token</button></div><div id="tk"></div>
+   <table><tr><th>Aparelho</th><th>Criado</th><th>Último uso</th><th></th></tr>${(devs||[]).map(d=>`<tr><td>${esc(d.nome)}</td><td>${new Date(d.created_at).toLocaleDateString("pt-BR")}</td><td>${d.ultimo_uso?new Date(d.ultimo_uso).toLocaleString("pt-BR",{timeZone:"America/Sao_Paulo"}):"—"}</td><td>${d.revogado_em?'<span class="tag rd">revogado</span>':`<button class="ghost sm" data-rv="${d.id}">Revogar</button>`}</td></tr>`).join("")||'<tr><td colspan="4" class="mut">Nenhum aparelho.</td></tr>'}</table></div>
   <div class="card" style="margin-top:1rem"><div class="row"><h2>Funções e avaliadores</h2><div class="sp"></div><button class="sm" id="na">+ Nova função</button></div>
    <table><tr><th>Pessoa</th><th>Função</th><th>Nível</th><th>Avaliador(a)</th><th>Revisão</th><th>Ativa</th><th></th></tr>${as.map(a=>`<tr data-a="${a.id}"><td>${esc(pn(a.profile_id))}</td><td><input data-k="titulo" value="${esc(a.titulo)}"><div class="mut sm">${a.function_key} · ${a.track}</div></td>
    <td><select data-k="level_code"><option value="">—</option>${S.levels.map(l=>`<option value="${l.code}" ${l.code===a.level_code?"selected":""}>${l.code} · ${esc(l.cargo)}</option>`).join("")}</select></td>
@@ -267,6 +282,11 @@ async function adminView(){
     const {error}=await sb.from("assignments").update(row).eq("id",b.dataset.sa);toast(error?error.message:"Função salva")});
   const fn=async body=>{const {data:{session}}=await sb.auth.getSession();const r=await fetch(SB_URL+"/functions/v1/admin-users",{method:"POST",headers:{"Content-Type":"application/json",apikey:SB_KEY,Authorization:"Bearer "+session.access_token},body:JSON.stringify(body)});return r.json()};
   document.querySelectorAll("[data-rp]").forEach(b=>b.onclick=async()=>{const s=prompt("Nova senha provisória (mín. 8 caracteres):");if(!s)return;const r=await fn({action:"reset_password",id:b.dataset.rp,senha:s});toast(r.error||"Senha redefinida; troca obrigatória no próximo acesso")});
+  document.querySelectorAll("[data-rpin]").forEach(b=>b.onclick=async()=>{if(!confirm("Apagar o PIN desta pessoa? Ela cadastra um novo no app."))return;const {error}=await sb.rpc("admin_reset_pin",{p:b.dataset.rpin});toast(error?error.message:"PIN apagado");adminView()});
+  document.querySelectorAll("[data-rv]").forEach(b=>b.onclick=async()=>{if(!confirm("Revogar este aparelho? Ele para de funcionar na hora."))return;const {error}=await sb.rpc("admin_revoke_device",{d:b.dataset.rv});toast(error?error.message:"Aparelho revogado");adminView()});
+  $("#nd").onclick=async()=>{const n=prompt("Nome do aparelho (ex.: Recepção):","Recepção");if(!n)return;const {data:t,error}=await sb.rpc("admin_create_device",{nome:n});if(error)return toast(error.message);
+    $("#tk").innerHTML=`<div class="note" style="margin:.6rem 0"><b>Token do aparelho (aparece só agora):</b><div style="display:flex;gap:.5rem;margin-top:.4rem"><input id="tkv" readonly value="${esc(t)}" style="font-family:monospace"><button class="sm" id="tkc">Copiar</button></div><p class="mut sm">Digite no portal Wi-Fi do aparelho (rede “BFit-Checklist”). Depois de fechar esta tela não dá para ver de novo — se perder, revogue e gere outro.</p></div>`;
+    $("#tkc").onclick=()=>{navigator.clipboard.writeText(t);toast("Token copiado")}};
   $("#nu").onclick=()=>{$("#nf").innerHTML=`<div class="grid" style="margin:.5rem 0"><input id="n1" placeholder="Nome"><input id="n2" placeholder="usuário (ex.: ana)"><input id="n3" placeholder="Senha provisória (mín. 8)"><button id="n4">Criar</button></div>`;
     $("#n4").onclick=async()=>{const r=await fn({action:"create_user",nome:$("#n1").value,usuario:$("#n2").value,senha:$("#n3").value});if(r.error)return toast(r.error);toast("Pessoa criada");adminView()}};
   $("#na").onclick=async()=>{const p=prompt("Usuário da pessoa (ex.: veronica):");if(!p)return;const pr=ps.find(x=>x.usuario===p.trim().toLowerCase());if(!pr)return toast("Usuário não encontrado");
